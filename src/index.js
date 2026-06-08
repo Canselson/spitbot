@@ -34,4 +34,4 @@ createClient().initialize();
 cron.schedule(schedule, () => {
   console.log('[cron] Triggered. Sending weekly digest…');
   sendWeeklyDigest();
-});
+}, { timezone: 'Europe/London' });

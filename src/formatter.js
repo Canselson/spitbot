@@ -9,11 +9,21 @@ function pad(n) {
 }
 
 function formatTime(date) {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return date.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'Europe/London',
+    hour12: false,
+  });
 }
 
 function formatDayHeader(date) {
-  return `${DAY_NAMES[date.getDay()]} ${date.getDate()} ${MONTH_NAMES[date.getMonth()]}`;
+  return date.toLocaleDateString('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'Europe/London',
+  }).replace(',', '');
 }
 
 function formatEvent(event) {
