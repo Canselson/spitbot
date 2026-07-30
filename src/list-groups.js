@@ -8,6 +8,10 @@ const qrcode = require('qrcode-terminal');
 
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: './.wwebjs_auth' }),
+  webVersionCache: {
+    type: 'remote',
+    remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041831138-alpha.html',
+  },
   puppeteer: { headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] },
 });
 
@@ -24,12 +28,10 @@ client.on('ready', async () => {
   console.log(`\nFound ${groups.length} group(s):\n`);
 
   for (const g of groups) {
-    const communityTag = g.groupMetadata?.isCommunityAnnounceGroup
-      ? ' [Community announcement channel]'
-      : g.groupMetadata?.isCommunity
-      ? ' [Community]'
-      : '';
-    console.log(`  "${g.name}"${communityTag}`);
+    const meta = g.groupMetadata;
+    const isAnnounce = !!(meta && (meta.announce || meta.isCommunityAnnounceGroup));
+    const tag = isAnnounce ? ' [Community announcement channel]' : '';
+    console.log(`  "${g.name}"${tag}`);
   }
 
   console.log('\nCopy the exact name (including capitalisation and spaces) into WHATSAPP_GROUP_NAME in .env');

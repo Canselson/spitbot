@@ -10,6 +10,10 @@ function createClient() {
 
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: authPath }),
+    webVersionCache: {
+      type: 'remote',
+      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041831138-alpha.html',
+    },
     puppeteer: {
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
@@ -73,14 +77,20 @@ async function sendToGroup(groupName, message) {
   await waitUntilReady();
 
   const chats = await client.getChats();
-  const group = chats.find((chat) => chat.isGroup && chat.name === groupName);
+  const matches = chats.filter((chat) => chat.isGroup && chat.name === groupName);
 
-  if (!group) {
+  if (matches.length === 0) {
     const groupNames = chats.filter((c) => c.isGroup).map((c) => `"${c.name}"`).join(', ');
     throw new Error(
       `Group "${groupName}" not found.\nAvailable groups: ${groupNames || '(none)'}\nCheck WHATSAPP_GROUP_NAME in .env`
     );
   }
+
+  // Prefer the community announcement channel if there are multiple groups with the same name
+  const group = matches.find((c) => {
+    const m = c.groupMetadata;
+    return m && (m.announce || m.isCommunityAnnounceGroup);
+  }) ?? matches[0];
 
   const meta = group.groupMetadata;
   const isAnnounce = !!(meta && (meta.announce || meta.isCommunityAnnounceGroup));
