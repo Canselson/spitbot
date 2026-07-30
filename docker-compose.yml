@@ -1,0 +1,13 @@
+services:
+  spitbot:
+    build: .
+    container_name: spitbot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3003"
+      WWEBJS_AUTH_PATH: /app/.wwebjs_auth
+    volumes:
+      - ./wwebjs_auth:/app/.wwebjs_auth
+    ports:
+      - "3003:3003"
