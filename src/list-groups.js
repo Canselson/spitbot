@@ -17,6 +17,7 @@ client.on('qr', (qr) => {
 });
 
 client.on('ready', async () => {
+  await new Promise((r) => setTimeout(r, 5000));
   const chats = await client.getChats();
   const groups = chats.filter((c) => c.isGroup);
 
