@@ -1,6 +1,6 @@
 const http = require('http');
 const QRCode = require('qrcode');
-const { getWeekEvents } = require('./calendar');
+const { getWeekEvents, getNextWeekBounds } = require('./calendar');
 const { formatWeeklyMessage } = require('./formatter');
 
 let currentQR = null;
@@ -57,7 +57,8 @@ function createServer() {
 
     if (req.url === '/preview') {
       try {
-        const events = await getWeekEvents();
+        const bounds = getNextWeekBounds();
+        const events = await getWeekEvents(bounds);
         const message = formatWeeklyMessage(events);
         const rendered = message
           .replace(/&/g, '&amp;')
@@ -67,9 +68,11 @@ function createServer() {
           .replace(/_(.*?)_/g, '<em>$1</em>')
           .replace(/\n/g, '<br>');
         const group = process.env.WHATSAPP_GROUP_NAME || '(group not set)';
+        const fmtDate = (d) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'Europe/London' });
+        const rangeLabel = `${fmtDate(bounds.monday)} – ${fmtDate(bounds.sunday)}`;
         const body = `
           <h2>📋 Message Preview</h2>
-          <p style="color:#888;font-size:13px">What will be sent to <strong>${group}</strong> on Monday at 08:00</p>
+          <p style="color:#888;font-size:13px">What will be sent to <strong>${group}</strong> on Monday at 08:00<br>Covering <strong>${rangeLabel}</strong></p>
           <div style="background:#dcf8c6;border-radius:12px;padding:16px 20px;max-width:380px;margin:20px auto;text-align:left;font-size:15px;line-height:1.6;box-shadow:0 1px 4px rgba(0,0,0,.12);word-break:break-word">${rendered}</div>
           <p style="margin-top:24px"><a href="/preview" style="color:#555;font-size:13px">↺ Refresh</a></p>
           ${navLinks()}

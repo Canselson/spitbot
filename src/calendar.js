@@ -17,6 +17,24 @@ function getWeekBounds() {
   return { monday, sunday };
 }
 
+// Returns the week the bot will cover on its next Monday send.
+// If today is Monday, that's this week; otherwise it's next Monday's week.
+function getNextWeekBounds() {
+  const now = new Date();
+  const day = now.getDay();
+  const diffToNextMonday = day === 1 ? 0 : (8 - day) % 7;
+
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diffToNextMonday);
+  monday.setHours(0, 0, 0, 0);
+
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+
+  return { monday, sunday };
+}
+
 function isAllDay(event) {
   return !!(event.start && event.start.dateOnly);
 }
@@ -54,11 +72,11 @@ function expandAllDayEvent(event, monday, sunday) {
   return results;
 }
 
-async function getWeekEvents() {
+async function getWeekEvents(bounds) {
   const url = process.env.ICS_URL;
   if (!url) throw new Error('ICS_URL is not set in .env');
 
-  const { monday, sunday } = getWeekBounds();
+  const { monday, sunday } = bounds || getWeekBounds();
 
   let rawEvents;
   try {
@@ -122,4 +140,4 @@ async function getWeekEvents() {
   return weekEvents.sort((a, b) => a.start - b.start);
 }
 
-module.exports = { getWeekEvents, getWeekBounds };
+module.exports = { getWeekEvents, getWeekBounds, getNextWeekBounds };
