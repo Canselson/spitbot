@@ -1,6 +1,6 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { setQR, setReady } = require('./qr-server');
+const { setQR, setReady, setClient } = require('./qr-server');
 
 let client = null;
 let isReady = false;
@@ -37,6 +37,7 @@ function createClient() {
     console.log('[whatsapp] Client ready.');
     isReady = true;
     setReady();
+    setClient(client);
   });
 
   client.on('auth_failure', (msg) => {

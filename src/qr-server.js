@@ -3,6 +3,7 @@ const QRCode = require('qrcode');
 
 let currentQR = null;
 let status = 'waiting'; // 'waiting' | 'qr' | 'ready'
+let whatsappClient = null;
 
 function setQR(qr) {
   currentQR = qr;
@@ -14,6 +15,10 @@ function setReady() {
   status = 'ready';
 }
 
+function setClient(c) {
+  whatsappClient = c;
+}
+
 function createServer() {
   const port = process.env.PORT || 3000;
 
@@ -21,6 +26,30 @@ function createServer() {
     if (req.url === '/health') {
       res.writeHead(200);
       res.end('ok');
+      return;
+    }
+
+    if (req.url === '/groups') {
+      if (!whatsappClient || status !== 'ready') {
+        res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('⏳ Not ready', '<h2>⏳ Bot not ready</h2><p>Wait for the bot to be authenticated and try again.</p>'));
+        return;
+      }
+      try {
+        const chats = await whatsappClient.getChats();
+        const groups = chats.filter((c) => c.isGroup);
+        const items = groups.map((g) => {
+          const tag = g.groupMetadata?.isCommunityAnnounceGroup
+            ? ' <strong style="color:green">← Community announcement channel</strong>'
+            : '';
+          return `<li style="margin:6px 0"><code style="background:#eee;padding:2px 6px;border-radius:4px">${g.name}</code>${tag}</li>`;
+        }).join('');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('Groups', `<h2>WhatsApp Groups</h2><p>Copy the exact name into <code>WHATSAPP_GROUP_NAME</code> in your <code>.env</code>:</p><ul style="text-align:left;display:inline-block">${items}</ul>`));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('Error', `<h2>Error</h2><pre>${err.message}</pre>`));
+      }
       return;
     }
 
@@ -66,4 +95,4 @@ function page(title, body, refreshSecs) {
 </html>`;
 }
 
-module.exports = { createServer, setQR, setReady };
+module.exports = { createServer, setQR, setReady, setClient };
