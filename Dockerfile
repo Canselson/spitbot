@@ -31,4 +31,7 @@ RUN npm ci --omit=dev
 
 COPY . .
 
-CMD ["node", "src/index.js"]
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+
+CMD ["./entrypoint.sh"]
