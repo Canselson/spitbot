@@ -9,6 +9,7 @@ createServer();
 // Give the website its controls: manual send, deep health check, and the job list.
 setHooks({
   triggerDigest: () => scheduler.runDigestNow(),
+  triggerTestToSelf: () => scheduler.runDigestToSelf(),
   healthCheck: () => getSessionHealth(),
   diagnostics: () => getDiagnostics(),
   listGroups: () => listGroups(),

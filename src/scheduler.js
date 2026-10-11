@@ -9,7 +9,7 @@
  * records the outcome to state so success/failure is visible on the website.
  */
 const cron = require('node-cron');
-const { sendToGroup } = require('./whatsapp');
+const { sendToGroup, sendToSelf } = require('./whatsapp');
 const { getWeekEvents } = require('./calendar');
 const { formatWeeklyMessage } = require('./formatter');
 const state = require('./state');
@@ -78,6 +78,28 @@ function runDigestNow() {
   return runJob(digestJob(), 'manual');
 }
 
+/**
+ * Build the weekly digest and send it to the bot's own chat — a safe test that
+ * exercises the full send path without posting to a real group.
+ */
+async function runDigestToSelf() {
+  const id = 'digest-test-self';
+  const name = 'Weekly digest (test to self)';
+  try {
+    const events = await getWeekEvents();
+    const message = formatWeeklyMessage(events);
+    const detail = await sendToSelf(message);
+    const entry = state.recordRun({ id, name, type: 'digest', ok: true, detail, trigger: 'manual' });
+    console.log('[scheduler] Test digest sent to self.');
+    return { ok: true, error: null, entry };
+  } catch (err) {
+    const entry = state.recordRun({ id, name, type: 'digest', ok: false, error: err.message, trigger: 'manual' });
+    console.error(`[scheduler] Test digest to self FAILED: ${err.message}`);
+    if (err && err.stack) console.error(err.stack);
+    return { ok: false, error: err.message, entry };
+  }
+}
+
 /** (Re)register cron tasks from the current set of enabled jobs. */
 function reload() {
   for (const t of tasks) t.stop();
@@ -102,4 +124,4 @@ function start() {
   reload();
 }
 
-module.exports = { start, reload, runJob, runDigestNow, digestJob, allJobs, TZ };
+module.exports = { start, reload, runJob, runDigestNow, runDigestToSelf, digestJob, allJobs, TZ };

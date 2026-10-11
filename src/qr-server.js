@@ -11,6 +11,7 @@ let whatsappClient = null;
 // Injected by index.js to avoid a require cycle (scheduler → whatsapp → qr-server).
 let hooks = {
   triggerDigest: async () => ({ ok: false, error: 'Scheduler not wired up.' }),
+  triggerTestToSelf: async () => ({ ok: false, error: 'Scheduler not wired up.' }),
   healthCheck: async () => { throw new Error('Health check not wired up.'); },
   diagnostics: async () => { throw new Error('Diagnostics not wired up.'); },
   listGroups: async () => { throw new Error('Group listing not wired up.'); },
@@ -136,6 +137,23 @@ function createServer() {
       return;
     }
 
+    // Safe test — sends the digest to the bot's own "Message Yourself" chat.
+    if (url === '/send-test' && req.method === 'POST') {
+      await readBody(req);
+      if (status !== 'ready') {
+        res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('Send test', `<h2>⏳ Not ready</h2><p>The bot is not connected yet. Try again once it shows as connected.</p>${navLinks()}`));
+        return;
+      }
+      const result = await hooks.triggerTestToSelf();
+      const body = result.ok
+        ? `<h2>✅ Test sent</h2><p>The digest was sent to the bot's own chat (<em>Message Yourself</em>). Open WhatsApp on the linked phone to see it — no group was touched.</p>`
+        : `<h2>❌ Test failed</h2><pre style="white-space:pre-wrap;color:#c0392b">${esc(result.error)}</pre>`;
+      res.writeHead(result.ok ? 200 : 500, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(page('Send test', body + navLinks()));
+      return;
+    }
+
     if (url === '/groups') {
       if (!whatsappClient || status !== 'ready') {
         res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -225,8 +243,11 @@ function createServer() {
           <div style="font-weight:600;margin-bottom:6px">Weekly digest</div>
           <div>${runBadge(lastDigest)}</div>
           <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
-            <form method="POST" action="/send-now" style="margin:0" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Sending…'">
-              <button type="submit" style="background:#1a7f37;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px">Send digest now</button>
+            <form method="POST" action="/send-test" style="margin:0" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Sending…'">
+              <button type="submit" style="background:#1a7f37;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px">Send test to yourself</button>
+            </form>
+            <form method="POST" action="/send-now" style="margin:0" onsubmit="return confirm('This posts the REAL digest to the live group. Continue?')&&(this.querySelector('button').disabled=true,this.querySelector('button').textContent='Sending…',true)">
+              <button type="submit" style="background:#b0381f;color:#fff;border:0;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px">Send to live group</button>
             </form>
             <a href="/check" style="background:#eee;color:#333;border-radius:6px;padding:8px 14px;text-decoration:none;font-size:14px">Run health check</a>
           </div>

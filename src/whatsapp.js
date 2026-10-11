@@ -166,6 +166,55 @@ async function getDiagnostics() {
   });
 }
 
+/**
+ * Send text to a chat id and confirm it landed, all in the page context.
+ * Avoids getChats/getChatModel/getMessageModel, which throw an IndexedDB
+ * DataError against current WhatsApp Web builds.
+ */
+async function dispatchToChat(chatId, label, message, isAnnounce) {
+  console.log(`[send] Chat: "${label}" | ID: ${chatId} | Announce-only: ${isAnnounce}`);
+
+  const result = await client.pupPage.evaluate(async (chatId, text) => {
+    try {
+      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+      if (!chat) return { ok: false, err: 'chat not found in page context' };
+      const msg = await window.WWebJS.sendMessage(chat, text, {});
+      return { ok: true, id: msg && msg.id ? msg.id._serialized : null };
+    } catch (e) {
+      return { ok: false, err: (e && e.message) || String(e) };
+    }
+  }, chatId, message);
+
+  if (!result.ok) {
+    throw new Error(`Failed to dispatch message to "${label}": ${result.err}`);
+  }
+
+  await new Promise((r) => setTimeout(r, 3000));
+
+  const confirmed = await client.pupPage.evaluate(async (chatId, text) => {
+    try {
+      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+      const msgs = chat && chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : [];
+      return msgs.slice(-15).some((m) => m && m.body === text && m.id && m.id.fromMe);
+    } catch (e) {
+      return false;
+    }
+  }, chatId, message);
+
+  if (!confirmed) {
+    throw new Error(
+      `Message was dispatched but did not appear in "${label}" after 3s — ` +
+      `WhatsApp likely rejected it silently. ` +
+      (isAnnounce
+        ? 'This is almost always because the linked account is not an admin of the announcement channel.'
+        : 'Check the account still has permission to post in this chat.')
+    );
+  }
+
+  console.log(`[send] Confirmed in chat history. Message delivered to "${label}".`);
+  return { chatName: label, chatId, isAnnounce, confirmed: true };
+}
+
 async function sendToGroup(groupName, message) {
   if (!groupName) throw new Error('WHATSAPP_GROUP_NAME is not set in .env');
 
@@ -183,53 +232,18 @@ async function sendToGroup(groupName, message) {
 
   // Prefer the community announcement channel if several groups share the name.
   const group = matches.find((g) => g.announce) || matches[0];
-  const { id: chatId, name, announce: isAnnounce } = group;
-
-  console.log(`[send] Chat: "${name}" | ID: ${chatId} | Announce-only: ${isAnnounce}`);
-
-  // Send directly in the page context via WWebJS.sendMessage + getChat(getAsModel:false).
-  // This avoids getChats/getChatModel/getMessageModel, all of which throw an
-  // IndexedDB DataError against current WhatsApp Web builds.
-  const result = await client.pupPage.evaluate(async (chatId, text) => {
-    try {
-      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
-      if (!chat) return { ok: false, err: 'chat not found in page context' };
-      const msg = await window.WWebJS.sendMessage(chat, text, {});
-      return { ok: true, id: msg && msg.id ? msg.id._serialized : null };
-    } catch (e) {
-      return { ok: false, err: (e && e.message) || String(e) };
-    }
-  }, chatId, message);
-
-  if (!result.ok) {
-    throw new Error(`Failed to dispatch message to "${name}": ${result.err}`);
-  }
-
-  await new Promise((r) => setTimeout(r, 3000));
-
-  // Confirm by reading the chat's in-memory messages (no model serialization).
-  const confirmed = await client.pupPage.evaluate(async (chatId, text) => {
-    try {
-      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
-      const msgs = chat && chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : [];
-      return msgs.slice(-15).some((m) => m && m.body === text && m.id && m.id.fromMe);
-    } catch (e) {
-      return false;
-    }
-  }, chatId, message);
-
-  if (!confirmed) {
-    throw new Error(
-      `Message was dispatched but did not appear in "${name}" after 3s — ` +
-      `WhatsApp likely rejected it silently. ` +
-      (isAnnounce
-        ? 'This is almost always because the linked account is not an admin of the announcement channel.'
-        : 'Check the account still has permission to post in this group.')
-    );
-  }
-
-  console.log(`[send] Confirmed in chat history. Message delivered to "${name}".`);
-  return { chatName: name, chatId, isAnnounce, confirmed: true };
+  return dispatchToChat(group.id, group.name, message, group.announce);
 }
 
-module.exports = { createClient, waitUntilReady, isClientReady, listGroups, getSessionHealth, getDiagnostics, sendToGroup };
+/**
+ * Send to the bot's own "Message Yourself" chat — a safe end-to-end test that
+ * never touches a real group. Proves the full send path works.
+ */
+async function sendToSelf(message) {
+  await waitUntilReady();
+  const selfId = client.info && client.info.wid ? client.info.wid._serialized : null;
+  if (!selfId) throw new Error('Could not determine the linked account id.');
+  return dispatchToChat(selfId, 'yourself (test)', message, false);
+}
+
+module.exports = { createClient, waitUntilReady, isClientReady, listGroups, getSessionHealth, getDiagnostics, sendToGroup, sendToSelf };
