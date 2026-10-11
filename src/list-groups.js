@@ -20,15 +20,29 @@ client.on('qr', (qr) => {
 
 client.on('ready', async () => {
   await new Promise((r) => setTimeout(r, 5000));
-  const chats = await client.getChats();
-  const groups = chats.filter((c) => c.isGroup);
+
+  // Read the in-memory Chat collection directly — client.getChats() throws an
+  // IndexedDB DataError against current WhatsApp Web builds.
+  const groups = await client.pupPage.evaluate(() => {
+    const chats = window.require('WAWebCollections').Chat.getModelsArray();
+    return chats
+      .filter((c) => {
+        const id = (c.id && c.id._serialized) || '';
+        return !!c.groupMetadata || /@g\.us$/.test(id);
+      })
+      .map((c) => {
+        const meta = c.groupMetadata;
+        return {
+          name: c.formattedTitle || (meta && meta.subject) || '(unknown)',
+          announce: !!(meta && (meta.announce || meta.isCommunityAnnounceGroup)),
+        };
+      });
+  });
 
   console.log(`\nFound ${groups.length} group(s):\n`);
 
   for (const g of groups) {
-    const meta = g.groupMetadata;
-    const isAnnounce = !!(meta && (meta.announce || meta.isCommunityAnnounceGroup));
-    const tag = isAnnounce ? ' [Community announcement channel]' : '';
+    const tag = g.announce ? ' [Community announcement channel]' : '';
     console.log(`  "${g.name}"${tag}`);
   }
 

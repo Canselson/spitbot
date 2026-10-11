@@ -13,6 +13,7 @@ let hooks = {
   triggerDigest: async () => ({ ok: false, error: 'Scheduler not wired up.' }),
   healthCheck: async () => { throw new Error('Health check not wired up.'); },
   diagnostics: async () => { throw new Error('Diagnostics not wired up.'); },
+  listGroups: async () => { throw new Error('Group listing not wired up.'); },
   getJobs: () => [],
 };
 
@@ -142,12 +143,9 @@ function createServer() {
         return;
       }
       try {
-        const chats = await whatsappClient.getChats();
-        const groups = chats.filter((c) => c.isGroup);
+        const groups = await hooks.listGroups();
         const items = groups.map((g) => {
-          const meta = g.groupMetadata;
-          const isAnnounce = !!(meta && (meta.announce || meta.isCommunityAnnounceGroup));
-          const tag = isAnnounce ? ' <strong style="color:green">← Community announcement channel</strong>' : '';
+          const tag = g.announce ? ' <strong style="color:green">← Community announcement channel</strong>' : '';
           return `<li style="margin:6px 0"><code style="background:#eee;padding:2px 6px;border-radius:4px">${esc(g.name)}</code>${tag}</li>`;
         }).join('');
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });

@@ -74,18 +74,50 @@ function isClientReady() {
 }
 
 /**
- * Actively verifies the session can talk to WhatsApp Web by fetching chats.
- * This is what "logged in" should really mean — it catches a stale pinned
- * WhatsApp Web version or a broken Store that the "ready" event alone misses.
+ * Lightweight list of group chats: { id, name, announce }.
+ *
+ * Deliberately avoids client.getChats(), whose per-chat getChatModel()
+ * serialization throws an IndexedDB DataError against current WhatsApp Web
+ * builds. We only read the in-memory Chat collection, which works fine.
+ */
+async function listGroups() {
+  if (!client || !isReady) throw new Error('WhatsApp client is not ready.');
+  return client.pupPage.evaluate(() => {
+    const chats = window.require('WAWebCollections').Chat.getModelsArray();
+    return chats
+      .filter((c) => {
+        const id = (c.id && c.id._serialized) || '';
+        return !!c.groupMetadata || /@g\.us$/.test(id);
+      })
+      .map((c) => {
+        const meta = c.groupMetadata;
+        return {
+          id: c.id._serialized,
+          name: c.formattedTitle || (meta && meta.subject) || '(unknown)',
+          announce: !!(meta && (meta.announce || meta.isCommunityAnnounceGroup)),
+        };
+      });
+  });
+}
+
+/**
+ * Actively verifies the session can talk to WhatsApp Web by reading the chat
+ * collection. This is what "logged in" should really mean — it catches a
+ * stale pinned WhatsApp Web version that the "ready" event alone misses.
  * Throws if the session is not usable.
  */
 async function getSessionHealth() {
   if (!client || !isReady) throw new Error('WhatsApp client is not ready.');
-  const chats = await client.getChats();
-  const groups = chats.filter((c) => c.isGroup);
+  const counts = await client.pupPage.evaluate(() => {
+    const chats = window.require('WAWebCollections').Chat.getModelsArray();
+    const groups = chats.filter((c) => {
+      const id = (c.id && c.id._serialized) || '';
+      return !!c.groupMetadata || /@g\.us$/.test(id);
+    });
+    return { totalChats: chats.length, groupCount: groups.length };
+  });
   return {
-    totalChats: chats.length,
-    groupCount: groups.length,
+    ...counts,
     me: client.info && client.info.wid ? client.info.wid.user : null,
   };
 }
@@ -139,68 +171,56 @@ async function sendToGroup(groupName, message) {
 
   await waitUntilReady();
 
-  const chats = await client.getChats();
-  const matches = chats.filter((chat) => chat.isGroup && chat.name === groupName);
+  const groups = await listGroups();
+  const matches = groups.filter((g) => g.name === groupName);
 
   if (matches.length === 0) {
-    const groupNames = chats.filter((c) => c.isGroup).map((c) => `"${c.name}"`).join(', ');
+    const names = groups.map((g) => `"${g.name}"`).join(', ');
     throw new Error(
-      `Group "${groupName}" not found.\nAvailable groups: ${groupNames || '(none)'}\nCheck WHATSAPP_GROUP_NAME in .env`
+      `Group "${groupName}" not found.\nAvailable groups: ${names || '(none)'}\nCheck WHATSAPP_GROUP_NAME in .env`
     );
   }
 
-  // Prefer the community announcement channel if there are multiple groups with the same name
-  const group = matches.find((c) => {
-    const m = c.groupMetadata;
-    return m && (m.announce || m.isCommunityAnnounceGroup);
-  }) ?? matches[0];
+  // Prefer the community announcement channel if several groups share the name.
+  const group = matches.find((g) => g.announce) || matches[0];
+  const { id: chatId, name, announce: isAnnounce } = group;
 
-  const meta = group.groupMetadata;
-  const isAnnounce = !!(meta && (meta.announce || meta.isCommunityAnnounceGroup));
+  console.log(`[send] Chat: "${name}" | ID: ${chatId} | Announce-only: ${isAnnounce}`);
 
-  const myNumber = client.info.wid.user;
-  const participants = meta?.participants || [];
-  const me = participants.find((p) => p.id.user === myNumber);
-  const isAdmin = me ? (me.isAdmin || me.isSuperAdmin) : null;
-
-  console.log(`[send] Chat: "${group.name}" | ID: ${group.id._serialized}`);
-  console.log(`[send] Announce-only: ${isAnnounce} | Bot listed as admin: ${isAdmin ?? 'unknown'}`);
-
-  if (isAnnounce && isAdmin === false) {
-    throw new Error(
-      'The bot account is not listed as an admin in this announcement channel.\n' +
-      'Open the community in WhatsApp → Announcement group → Edit → make the linked number an admin.'
-    );
-  }
-
-  if (isAnnounce) {
-    const result = await client.pupPage.evaluate(async (chatId, text) => {
-      try {
-        const chat = window.Store.Chat.get(chatId);
-        if (!chat) return { ok: false, err: `chat ${chatId} not in Store` };
-        await window.Store.SendMessage.sendTextMsgToChat(chat, text, { ephemeralExpiration: 0 });
-        return { ok: true };
-      } catch (e) {
-        return { ok: false, err: String(e) };
-      }
-    }, group.id._serialized, message);
-
-    if (!result.ok) {
-      console.warn(`[send] Store API failed: ${result.err} — falling back to standard sendMessage`);
-      await client.sendMessage(group.id._serialized, message);
-    } else {
-      console.log('[send] Dispatched via Store API.');
+  // Send directly in the page context via WWebJS.sendMessage + getChat(getAsModel:false).
+  // This avoids getChats/getChatModel/getMessageModel, all of which throw an
+  // IndexedDB DataError against current WhatsApp Web builds.
+  const result = await client.pupPage.evaluate(async (chatId, text) => {
+    try {
+      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+      if (!chat) return { ok: false, err: 'chat not found in page context' };
+      const msg = await window.WWebJS.sendMessage(chat, text, {});
+      return { ok: true, id: msg && msg.id ? msg.id._serialized : null };
+    } catch (e) {
+      return { ok: false, err: (e && e.message) || String(e) };
     }
-  } else {
-    await client.sendMessage(group.id._serialized, message);
+  }, chatId, message);
+
+  if (!result.ok) {
+    throw new Error(`Failed to dispatch message to "${name}": ${result.err}`);
   }
 
   await new Promise((r) => setTimeout(r, 3000));
-  const recent = await group.fetchMessages({ limit: 10 });
-  const confirmed = recent.find((m) => m.fromMe && m.body === message);
+
+  // Confirm by reading the chat's in-memory messages (no model serialization).
+  const confirmed = await client.pupPage.evaluate(async (chatId, text) => {
+    try {
+      const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+      const msgs = chat && chat.msgs && chat.msgs.getModelsArray ? chat.msgs.getModelsArray() : [];
+      return msgs.slice(-15).some((m) => m && m.body === text && m.id && m.id.fromMe);
+    } catch (e) {
+      return false;
+    }
+  }, chatId, message);
+
   if (!confirmed) {
     throw new Error(
-      `Message was dispatched but did not appear in "${groupName}" after 3s — ` +
+      `Message was dispatched but did not appear in "${name}" after 3s — ` +
       `WhatsApp likely rejected it silently. ` +
       (isAnnounce
         ? 'This is almost always because the linked account is not an admin of the announcement channel.'
@@ -208,14 +228,8 @@ async function sendToGroup(groupName, message) {
     );
   }
 
-  console.log(`[send] Confirmed in chat history. Message delivered to "${groupName}".`);
-  return {
-    chatName: group.name,
-    chatId: group.id._serialized,
-    isAnnounce,
-    isAdmin,
-    confirmed: true,
-  };
+  console.log(`[send] Confirmed in chat history. Message delivered to "${name}".`);
+  return { chatName: name, chatId, isAnnounce, confirmed: true };
 }
 
-module.exports = { createClient, waitUntilReady, isClientReady, getSessionHealth, getDiagnostics, sendToGroup };
+module.exports = { createClient, waitUntilReady, isClientReady, listGroups, getSessionHealth, getDiagnostics, sendToGroup };
