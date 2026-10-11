@@ -68,6 +68,7 @@ async function runJob(job, trigger = 'schedule') {
       id: job.id, name: job.name, type: job.type, ok: false, error: err.message, trigger,
     });
     console.error(`[scheduler] "${job.name}" FAILED: ${err.message}`);
+    if (err && err.stack) console.error(err.stack);
     return { ok: false, error: err.message, entry };
   }
 }

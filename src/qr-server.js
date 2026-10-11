@@ -87,11 +87,12 @@ function createServer() {
           <p style="color:#888;font-size:13px">Linked number: ${esc(health.me || 'unknown')}</p>
           ${navLinks()}`));
       } catch (err) {
+        console.error('[check] Health check failed:', err && err.stack ? err.stack : err);
         res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
         res.end(page('Health check', `
           <h2>❌ Session not healthy</h2>
           <p>The bot shows as connected but could not fetch chats. The weekly digest would fail.</p>
-          <pre style="white-space:pre-wrap;color:#c0392b">${esc(err.message)}</pre>
+          <pre style="white-space:pre-wrap;color:#c0392b;text-align:left;max-width:700px;margin:12px auto;background:#fff;padding:12px;border-radius:8px;font-size:12px">${esc((err && err.stack) || (err && err.message) || String(err))}</pre>
           <p style="color:#888;font-size:13px">A common cause is a stale pinned WhatsApp Web version — see <code>webVersionCache</code> in <code>whatsapp.js</code>.</p>
           ${navLinks()}`));
       }
