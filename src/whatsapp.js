@@ -97,23 +97,39 @@ async function getSessionHealth() {
  */
 async function getDiagnostics() {
   if (!client || !isReady) throw new Error('WhatsApp client is not ready.');
-  return client.pupPage.evaluate(() => {
+  return client.pupPage.evaluate(async () => {
     const safe = (fn) => {
       try { const v = fn(); return v === undefined ? 'undefined' : v; }
       catch (e) { return `ERR: ${(e && e.message) || String(e)}`; }
     };
+    const req = (m) => { try { return window.require(m) ? 'present' : 'undefined'; } catch (e) { return `ERR: ${e.message}`; } };
+
+    const chats = window.require('WAWebCollections').Chat.getModelsArray();
+    const perChat = [];
+    for (let i = 0; i < chats.length; i++) {
+      const c = chats[i];
+      const info = { i, isGroup: !!c.groupMetadata, title: safe(() => c.formattedTitle) };
+      try {
+        await window.WWebJS.getChatModel(c);
+        info.getChatModel = 'ok';
+      } catch (e) {
+        info.getChatModel = `ERR: ${(e && e.message) || String(e)} | name=${e && e.name}`;
+      }
+      perChat.push(info);
+    }
+
     return {
-      loadedWaVersion: safe(() => window.require('WAWebVersion').default),
       debugVersion: safe(() => window.Debug && window.Debug.VERSION),
-      typeofRequire: typeof window.require,
-      typeofWWebJS: typeof window.WWebJS,
-      typeofStore: typeof window.Store,
-      collectionsKeys: safe(() => Object.keys(window.require('WAWebCollections')).slice(0, 15)),
-      chatModelCount: safe(() => window.require('WAWebCollections').Chat.getModelsArray().length),
-      firstChatSerialize: safe(() => {
-        const c = window.require('WAWebCollections').Chat.getModelsArray()[0];
-        return c ? Object.keys(c.serialize()).slice(0, 8) : 'no chats';
-      }),
+      modules: {
+        WAWebLidMigrationUtils: req('WAWebLidMigrationUtils'),
+        WAWebWidFactory: req('WAWebWidFactory'),
+        groupMetaInCollections: safe(() => {
+          const C = window.require('WAWebCollections');
+          return !!(C.GroupMetadata || C.WAWebGroupMetadataCollection) ? 'present' : 'undefined';
+        }),
+        toPnType: safe(() => typeof window.require('WAWebLidMigrationUtils').toPn),
+      },
+      perChat,
     };
   });
 }
