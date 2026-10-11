@@ -12,6 +12,7 @@ let whatsappClient = null;
 let hooks = {
   triggerDigest: async () => ({ ok: false, error: 'Scheduler not wired up.' }),
   healthCheck: async () => { throw new Error('Health check not wired up.'); },
+  diagnostics: async () => { throw new Error('Diagnostics not wired up.'); },
   getJobs: () => [],
 };
 
@@ -95,6 +96,24 @@ function createServer() {
           <pre style="white-space:pre-wrap;color:#c0392b;text-align:left;max-width:700px;margin:12px auto;background:#fff;padding:12px;border-radius:8px;font-size:12px">${esc((err && err.stack) || (err && err.message) || String(err))}</pre>
           <p style="color:#888;font-size:13px">A common cause is a stale pinned WhatsApp Web version — see <code>webVersionCache</code> in <code>whatsapp.js</code>.</p>
           ${navLinks()}`));
+      }
+      return;
+    }
+
+    // Low-level diagnostic — reports what actually loaded in the WhatsApp Web page.
+    if (url === '/diag') {
+      try {
+        const diag = await hooks.diagnostics();
+        console.log('[diag]', JSON.stringify(diag));
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('Diagnostics', `
+          <h2>🔬 WhatsApp Web diagnostics</h2>
+          <pre style="white-space:pre-wrap;text-align:left;max-width:700px;margin:12px auto;background:#fff;padding:16px;border-radius:8px;font-size:13px">${esc(JSON.stringify(diag, null, 2))}</pre>
+          ${navLinks()}`));
+      } catch (err) {
+        console.error('[diag] failed:', err && err.stack ? err.stack : err);
+        res.writeHead(503, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('Diagnostics', `<h2>Diagnostics unavailable</h2><pre style="white-space:pre-wrap;color:#c0392b">${esc((err && err.stack) || String(err))}</pre>${navLinks()}`));
       }
       return;
     }

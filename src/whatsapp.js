@@ -90,6 +90,34 @@ async function getSessionHealth() {
   };
 }
 
+/**
+ * Probes the WhatsApp Web page context to pinpoint why getChats() fails.
+ * Never throws — every check is wrapped, so we always get a full report of
+ * what loaded (actual WA Web version, module loader, the modules getChats needs).
+ */
+async function getDiagnostics() {
+  if (!client || !isReady) throw new Error('WhatsApp client is not ready.');
+  return client.pupPage.evaluate(() => {
+    const safe = (fn) => {
+      try { const v = fn(); return v === undefined ? 'undefined' : v; }
+      catch (e) { return `ERR: ${(e && e.message) || String(e)}`; }
+    };
+    return {
+      loadedWaVersion: safe(() => window.require('WAWebVersion').default),
+      debugVersion: safe(() => window.Debug && window.Debug.VERSION),
+      typeofRequire: typeof window.require,
+      typeofWWebJS: typeof window.WWebJS,
+      typeofStore: typeof window.Store,
+      collectionsKeys: safe(() => Object.keys(window.require('WAWebCollections')).slice(0, 15)),
+      chatModelCount: safe(() => window.require('WAWebCollections').Chat.getModelsArray().length),
+      firstChatSerialize: safe(() => {
+        const c = window.require('WAWebCollections').Chat.getModelsArray()[0];
+        return c ? Object.keys(c.serialize()).slice(0, 8) : 'no chats';
+      }),
+    };
+  });
+}
+
 async function sendToGroup(groupName, message) {
   if (!groupName) throw new Error('WHATSAPP_GROUP_NAME is not set in .env');
 
@@ -174,4 +202,4 @@ async function sendToGroup(groupName, message) {
   };
 }
 
-module.exports = { createClient, waitUntilReady, isClientReady, getSessionHealth, sendToGroup };
+module.exports = { createClient, waitUntilReady, isClientReady, getSessionHealth, getDiagnostics, sendToGroup };

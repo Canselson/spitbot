@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { createServer, setHooks } = require('./qr-server');
-const { createClient, getSessionHealth } = require('./whatsapp');
+const { createClient, getSessionHealth, getDiagnostics } = require('./whatsapp');
 const scheduler = require('./scheduler');
 
 // Start the QR web server first so the URL is available while WhatsApp initialises.
@@ -10,6 +10,7 @@ createServer();
 setHooks({
   triggerDigest: () => scheduler.runDigestNow(),
   healthCheck: () => getSessionHealth(),
+  diagnostics: () => getDiagnostics(),
   getJobs: () => scheduler.allJobs(),
 });
 
