@@ -7,7 +7,9 @@ services:
     environment:
       PORT: "3003"
       WWEBJS_AUTH_PATH: /app/.wwebjs_auth
+      DATA_PATH: /app/data
     volumes:
       - ./wwebjs_auth:/app/.wwebjs_auth
+      - ./data:/app/data
     ports:
       - "3003:3003"

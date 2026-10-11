@@ -71,6 +71,27 @@ async function waitUntilReady(timeoutMs = 300000) {
   });
 }
 
+function isClientReady() {
+  return isReady;
+}
+
+/**
+ * Actively verifies the session can talk to WhatsApp Web by fetching chats.
+ * This is what "logged in" should really mean — it catches a stale pinned
+ * WhatsApp Web version or a broken Store that the "ready" event alone misses.
+ * Throws if the session is not usable.
+ */
+async function getSessionHealth() {
+  if (!client || !isReady) throw new Error('WhatsApp client is not ready.');
+  const chats = await client.getChats();
+  const groups = chats.filter((c) => c.isGroup);
+  return {
+    totalChats: chats.length,
+    groupCount: groups.length,
+    me: client.info && client.info.wid ? client.info.wid.user : null,
+  };
+}
+
 async function sendToGroup(groupName, message) {
   if (!groupName) throw new Error('WHATSAPP_GROUP_NAME is not set in .env');
 
@@ -135,15 +156,24 @@ async function sendToGroup(groupName, message) {
   await new Promise((r) => setTimeout(r, 3000));
   const recent = await group.fetchMessages({ limit: 10 });
   const confirmed = recent.find((m) => m.fromMe && m.body === message);
-  if (confirmed) {
-    console.log(`[send] Confirmed in chat history. Message delivered to "${groupName}".`);
-  } else {
-    console.warn(
-      `[send] WARNING: message not found in chat history after 3 s.\n` +
-      `       This usually means WhatsApp rejected it silently.\n` +
-      `       Check that the linked account is an admin of the ANNOUNCEMENT channel.`
+  if (!confirmed) {
+    throw new Error(
+      `Message was dispatched but did not appear in "${groupName}" after 3s — ` +
+      `WhatsApp likely rejected it silently. ` +
+      (isAnnounce
+        ? 'This is almost always because the linked account is not an admin of the announcement channel.'
+        : 'Check the account still has permission to post in this group.')
     );
   }
+
+  console.log(`[send] Confirmed in chat history. Message delivered to "${groupName}".`);
+  return {
+    chatName: group.name,
+    chatId: group.id._serialized,
+    isAnnounce,
+    isAdmin,
+    confirmed: true,
+  };
 }
 
-module.exports = { createClient, waitUntilReady, sendToGroup };
+module.exports = { createClient, waitUntilReady, isClientReady, getSessionHealth, sendToGroup };
