@@ -10,7 +10,7 @@
  */
 const cron = require('node-cron');
 const { sendToGroup, sendToSelf } = require('./whatsapp');
-const { getWeekEvents } = require('./calendar');
+const { getWeekEvents, getNextWeekBounds } = require('./calendar');
 const { formatWeeklyMessage } = require('./formatter');
 const state = require('./state');
 const messages = require('./messages');
@@ -38,7 +38,10 @@ function allJobs() {
 
 async function buildMessage(job) {
   if (job.type === 'digest') {
-    const events = await getWeekEvents();
+    // Always cover the upcoming Monday's week — same as the /preview page.
+    // When the real cron fires on Monday this is the current week; on any
+    // other day (e.g. a manual test) it's next week, which is what's useful.
+    const events = await getWeekEvents(getNextWeekBounds());
     return formatWeeklyMessage(events);
   }
   if (!job.text || !job.text.trim()) {
@@ -86,8 +89,7 @@ async function runDigestToSelf() {
   const id = 'digest-test-self';
   const name = 'Weekly digest (test to self)';
   try {
-    const events = await getWeekEvents();
-    const message = formatWeeklyMessage(events);
+    const message = await buildMessage(digestJob());
     const detail = await sendToSelf(message);
     const entry = state.recordRun({ id, name, type: 'digest', ok: true, detail, trigger: 'manual' });
     console.log('[scheduler] Test digest sent to self.');
