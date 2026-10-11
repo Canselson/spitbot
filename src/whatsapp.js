@@ -1,6 +1,7 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { setQR, setReady, setClient } = require('./qr-server');
+const { WA_WEB_VERSION_CACHE } = require('./wa-web-version');
 
 let client = null;
 let isReady = false;
@@ -10,10 +11,7 @@ function createClient() {
 
   client = new Client({
     authStrategy: new LocalAuth({ dataPath: authPath }),
-    webVersionCache: {
-      type: 'remote',
-      remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1041831138-alpha.html',
-    },
+    webVersionCache: WA_WEB_VERSION_CACHE,
     puppeteer: {
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
