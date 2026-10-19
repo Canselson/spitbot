@@ -31,7 +31,13 @@ function formatEvent(event) {
     const counter = event.totalDays ? ` (day ${event.dayOf} of ${event.totalDays})` : '';
     return `• All day – ${event.summary}${counter}`;
   }
-  return `• ${formatTime(event.start)} – ${event.summary}`;
+  // Training sessions show the full start–end time range; other events show the start only.
+  const isTraining = /training/i.test(event.summary);
+  const hasEnd = event.end && event.end > event.start;
+  const time = isTraining && hasEnd
+    ? `${formatTime(event.start)}–${formatTime(event.end)}`
+    : formatTime(event.start);
+  return `• ${time} – ${event.summary}`;
 }
 
 function formatWeeklyMessage(events) {
