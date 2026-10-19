@@ -1,8 +1,10 @@
 const http = require('http');
+const cron = require('node-cron');
 const QRCode = require('qrcode');
 const { getWeekEvents, getNextWeekBounds } = require('./calendar');
 const { formatWeeklyMessage } = require('./formatter');
 const state = require('./state');
+const messages = require('./messages');
 
 let currentQR = null;
 let status = 'waiting'; // 'waiting' | 'qr' | 'ready'
@@ -16,6 +18,7 @@ let hooks = {
   diagnostics: async () => { throw new Error('Diagnostics not wired up.'); },
   listGroups: async () => { throw new Error('Group listing not wired up.'); },
   getJobs: () => [],
+  reloadSchedule: () => {},
 };
 
 function setQR(qr) {
@@ -67,11 +70,94 @@ function runBadge(run) {
   return `<span style="color:#c0392b">❌ failed ${when}</span><br><small style="color:#c0392b">${esc(run.error || '')}</small>`;
 }
 
+// --- Recurring-message schedule helpers (friendly day + time <-> cron) ---
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAY_CHOICES = [
+  ['everyday', 'Every day'], ['1', 'Monday'], ['2', 'Tuesday'], ['3', 'Wednesday'],
+  ['4', 'Thursday'], ['5', 'Friday'], ['6', 'Saturday'], ['0', 'Sunday'],
+];
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+// Build a cron expression from a day choice ('everyday' or '0'-'6') and "HH:MM".
+// Returns null if the inputs are invalid.
+function buildCron(day, time) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(time || '');
+  if (!m) return null;
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) return null;
+  const validDay = day === 'everyday' || /^[0-6]$/.test(day);
+  if (!validDay) return null;
+  const dow = day === 'everyday' ? '*' : day;
+  const expr = `${minute} ${hour} * * ${dow}`;
+  return cron.validate(expr) ? expr : null;
+}
+
+// Parse our generated "m h * * dow" cron back into { day, time }, or null if custom.
+function parseCron(expr) {
+  const f = String(expr || '').trim().split(/\s+/);
+  if (f.length !== 5 || f[2] !== '*' || f[3] !== '*') return null;
+  const minute = Number(f[0]);
+  const hour = Number(f[1]);
+  if (!Number.isInteger(minute) || !Number.isInteger(hour)) return null;
+  const dow = f[4];
+  const day = dow === '*' ? 'everyday' : (/^[0-6]$/.test(dow) ? dow : null);
+  if (day === null) return null;
+  return { day, time: `${pad2(hour)}:${pad2(minute)}` };
+}
+
+function scheduleToHuman(expr) {
+  const p = parseCron(expr);
+  if (!p) return `cron: ${esc(expr)}`;
+  const label = p.day === 'everyday' ? 'Every day' : `${DAY_NAMES[Number(p.day)]}s`;
+  return `${label} at ${p.time}`;
+}
+
+function dayOptions(selected) {
+  return DAY_CHOICES
+    .map(([v, l]) => `<option value="${v}"${v === selected ? ' selected' : ''}>${l}</option>`)
+    .join('');
+}
+
+function parseForm(body) {
+  const p = new URLSearchParams(body || '');
+  return {
+    id: p.get('id') || '',
+    name: (p.get('name') || '').trim(),
+    day: p.get('day') || '',
+    time: p.get('time') || '',
+    text: p.get('text') || '',
+  };
+}
+
+// Reusable add/edit form.
+function messageForm({ action, submitLabel, id = '', name = '', day = '2', time = '12:00', text = '' }) {
+  const field = 'display:block;width:100%;max-width:420px;margin:4px 0 14px;padding:8px;border:1px solid #ccc;border-radius:6px;font-size:14px;box-sizing:border-box';
+  return `<form method="POST" action="${action}" style="text-align:left;max-width:460px;margin:0 auto;background:#fff;padding:20px;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    ${id ? `<input type="hidden" name="id" value="${esc(id)}">` : ''}
+    <label style="font-weight:600;font-size:13px">Name<input name="name" required maxlength="80" value="${esc(name)}" placeholder="e.g. Training signup reminder" style="${field}"></label>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label style="font-weight:600;font-size:13px;flex:1">Day<select name="day" style="${field}">${dayOptions(day)}</select></label>
+      <label style="font-weight:600;font-size:13px;flex:1">Time<input type="time" name="time" required value="${esc(time)}" style="${field}"></label>
+    </div>
+    <label style="font-weight:600;font-size:13px">Message<textarea name="text" required rows="3" placeholder="Remember to sign up for training this Sunday!" style="${field};resize:vertical">${esc(text)}</textarea></label>
+    <button type="submit" style="background:#1a7f37;color:#fff;border:0;border-radius:6px;padding:9px 16px;cursor:pointer;font-size:14px">${submitLabel}</button>
+    <a href="/messages" style="margin-left:12px;font-size:14px">Cancel</a>
+  </form>`;
+}
+
+function redirect(res, location) {
+  res.writeHead(303, { Location: location });
+  res.end();
+}
+
 function createServer() {
   const port = process.env.PORT || 3000;
 
   const server = http.createServer(async (req, res) => {
-    const url = (req.url || '/').split('?')[0];
+    const parsedUrl = new URL(req.url || '/', 'http://localhost');
+    const url = parsedUrl.pathname;
 
     if (url === '/health') {
       res.writeHead(200);
@@ -175,16 +261,27 @@ function createServer() {
       return;
     }
 
-    // Read-only view of all scheduled jobs (digest + recurring messages) and their last result.
+    // List scheduled jobs (digest + recurring messages), with controls for recurring ones.
     if (url === '/messages') {
+      const btn = 'border:0;border-radius:5px;padding:5px 10px;cursor:pointer;font-size:13px;margin:0';
       const rows = hooks.getJobs().map((job) => {
         const run = state.getLastRun(job.id);
-        const schedule = job.enabled ? `<code>${esc(job.schedule)}</code>` : '<em style="color:#888">disabled</em>';
+        const recurring = job.type === 'text';
+        const schedule = recurring
+          ? (job.enabled ? scheduleToHuman(job.schedule) : `<em style="color:#888">${scheduleToHuman(job.schedule)} (disabled)</em>`)
+          : scheduleToHuman(job.schedule);
+        const actions = recurring
+          ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
+              <a href="/messages/edit?id=${encodeURIComponent(job.id)}" style="${btn};background:#eee;color:#333;text-decoration:none">Edit</a>
+              <form method="POST" action="/messages/toggle" style="margin:0"><input type="hidden" name="id" value="${esc(job.id)}"><button type="submit" style="${btn};background:#e8e8e8;color:#333">${job.enabled ? 'Disable' : 'Enable'}</button></form>
+              <form method="POST" action="/messages/delete" style="margin:0" onsubmit="return confirm('Delete this recurring message?')"><input type="hidden" name="id" value="${esc(job.id)}"><button type="submit" style="${btn};background:#b0381f;color:#fff">Delete</button></form>
+            </div>`
+          : '<span style="color:#aaa;font-size:13px">built-in</span>';
         return `<tr>
           <td style="padding:8px 12px">${esc(job.name)}</td>
-          <td style="padding:8px 12px">${esc(job.type)}</td>
           <td style="padding:8px 12px">${schedule}</td>
           <td style="padding:8px 12px">${runBadge(run)}</td>
+          <td style="padding:8px 12px">${actions}</td>
         </tr>`;
       }).join('');
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -192,12 +289,63 @@ function createServer() {
         <h2>🗓️ Scheduled messages</h2>
         <table style="margin:16px auto;border-collapse:collapse;text-align:left;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
           <thead><tr style="background:#eee">
-            <th style="padding:8px 12px">Name</th><th style="padding:8px 12px">Type</th><th style="padding:8px 12px">Schedule</th><th style="padding:8px 12px">Last run</th>
+            <th style="padding:8px 12px">Name</th><th style="padding:8px 12px">Schedule</th><th style="padding:8px 12px">Last run</th><th style="padding:8px 12px">Actions</th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>
-        <p style="color:#888;font-size:13px">Times are Europe/London. Adding/editing recurring messages from here is coming soon.</p>
+        <p style="color:#888;font-size:13px">Times are Europe/London. Recurring messages send to the same group as the weekly digest (<code>${esc(process.env.WHATSAPP_GROUP_NAME || '(group not set)')}</code>).</p>
+        <h3 style="margin-top:32px">➕ Add a recurring message</h3>
+        ${messageForm({ action: '/messages/add', submitLabel: 'Add message' })}
         ${navLinks()}`));
+      return;
+    }
+
+    // Edit form for an existing recurring message.
+    if (url === '/messages/edit' && req.method === 'GET') {
+      const msg = messages.get(parsedUrl.searchParams.get('id') || '');
+      if (!msg) { redirect(res, '/messages'); return; }
+      const parsed = parseCron(msg.schedule) || { day: '2', time: '12:00' };
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(page('Edit message', `
+        <h2>✏️ Edit recurring message</h2>
+        ${messageForm({ action: '/messages/edit', submitLabel: 'Save changes', id: msg.id, name: msg.name, day: parsed.day, time: parsed.time, text: msg.text })}
+        ${navLinks()}`));
+      return;
+    }
+
+    // Create / update / delete / toggle recurring messages.
+    if ((url === '/messages/add' || url === '/messages/edit') && req.method === 'POST') {
+      const f = parseForm(await readBody(req));
+      const schedule = buildCron(f.day, f.time);
+      if (!f.name || !f.text.trim() || !schedule) {
+        res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(page('Invalid', `<h2>⚠️ Could not save</h2><p>Please provide a name, a message, and a valid day/time.</p><p><a href="/messages">Back</a></p>`));
+        return;
+      }
+      if (url === '/messages/add') {
+        messages.add({ name: f.name, schedule, text: f.text });
+      } else {
+        messages.update(f.id, { name: f.name, schedule, text: f.text });
+      }
+      hooks.reloadSchedule();
+      redirect(res, '/messages');
+      return;
+    }
+
+    if (url === '/messages/delete' && req.method === 'POST') {
+      const f = parseForm(await readBody(req));
+      messages.remove(f.id);
+      hooks.reloadSchedule();
+      redirect(res, '/messages');
+      return;
+    }
+
+    if (url === '/messages/toggle' && req.method === 'POST') {
+      const f = parseForm(await readBody(req));
+      const msg = messages.get(f.id);
+      if (msg) messages.update(f.id, { enabled: !msg.enabled });
+      hooks.reloadSchedule();
+      redirect(res, '/messages');
       return;
     }
 

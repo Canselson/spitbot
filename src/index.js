@@ -14,6 +14,7 @@ setHooks({
   diagnostics: () => getDiagnostics(),
   listGroups: () => listGroups(),
   getJobs: () => scheduler.allJobs(),
+  reloadSchedule: () => scheduler.reload(),
 });
 
 console.log(`Starting spitbot. Digest schedule: "${process.env.CRON_SCHEDULE || '0 8 * * 1'}" (Europe/London).`);
